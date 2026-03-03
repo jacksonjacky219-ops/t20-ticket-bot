@@ -1,14 +1,8 @@
 import os
 import asyncio
-import time
-from selenium import webdriver
-from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.chrome.service import Service
-from selenium.common.exceptions import WebDriverException
-from webdriver_manager.chrome import ChromeDriverManager
 from telegram.ext import ApplicationBuilder, CommandHandler
+from playwright.async_api import async_playwright
 
-# 🔐 TOKEN from Railway Environment Variable
 TOKEN = os.getenv("TOKEN")
 
 MATCHES = {
@@ -21,70 +15,11 @@ MATCHES = {
 }
 
 SUBSCRIBERS = set()
-LAST_AVAILABLE = {}
-
-# 🔥 STEALTH CHROME DRIVER
-def create_driver():
-    options = Options()
-    options.add_argument("--headless=new")
-    options.add_argument("--disable-blink-features=AutomationControlled")
-    options.add_argument("--disable-gpu")
-    options.add_argument("--window-size=1920,1080")
-    options.add_argument("--no-sandbox")
-    options.add_argument("--disable-dev-shm-usage")
-    options.add_argument("user-agent=Mozilla/5.0")
-
-    driver = webdriver.Chrome(
-        service=Service(ChromeDriverManager().install()),
-        options=options
-    )
-
-    driver.execute_script(
-        "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
-    )
-    return driver
-
-
-# 🔁 RETRY LOGIC
-def check_seat_layout(url):
-    for attempt in range(3):
-        try:
-            driver = create_driver()
-            driver.get(url)
-            time.sleep(6)
-
-            page = driver.page_source.lower()
-
-            layout_accessible = "block" in page
-
-            prices = []
-            if "₹2000" in page:
-                prices.append("₹2000")
-            if "₹3000" in page:
-                prices.append("₹3000")
-            if "₹3500" in page:
-                prices.append("₹3500")
-            if "₹4000" in page:
-                prices.append("₹4000")
-
-            driver.quit()
-
-            return {
-                "layout_accessible": layout_accessible,
-                "prices": prices
-            }
-
-        except WebDriverException:
-            print(f"Retry attempt {attempt+1}")
-            time.sleep(4)
-
-    return None
+LAST_STATUS = {}
 
 
 async def start(update, context):
-    await update.message.reply_text(
-        "🚀 Advanced Live Monitor Started\nUse /subscribe"
-    )
+    await update.message.reply_text("🚀 Cloud Monitor Started\nUse /subscribe")
 
 
 async def subscribe(update, context):
@@ -97,45 +32,69 @@ async def unsubscribe(update, context):
     await update.message.reply_text("❌ Unsubscribed")
 
 
+async def check_seat_layout(url):
+    async with async_playwright() as p:
+        browser = await p.chromium.launch(headless=True)
+        page = await browser.new_page()
+
+        await page.goto(url, timeout=60000)
+        await page.wait_for_timeout(5000)
+
+        content = await page.content()
+        await browser.close()
+
+        text = content.lower()
+
+        layout_accessible = "block" in text
+
+        prices = []
+        if "₹2000" in text:
+            prices.append("₹2000")
+        if "₹3000" in text:
+            prices.append("₹3000")
+        if "₹3500" in text:
+            prices.append("₹3500")
+        if "₹4000" in text:
+            prices.append("₹4000")
+
+        return {
+            "layout_accessible": layout_accessible,
+            "prices": prices
+        }
+
+
 async def monitor(app):
     while True:
-        print("\nChecking seat layouts...")
+        print("Checking seat layouts...")
 
         for name, data in MATCHES.items():
-            result = check_seat_layout(data["seat_url"])
+            try:
+                result = await check_seat_layout(data["seat_url"])
+                previous = LAST_STATUS.get(name)
 
-            if result is None:
-                continue
+                if previous != result:
+                    LAST_STATUS[name] = result
 
-            previous = LAST_AVAILABLE.get(name)
+                    if result["layout_accessible"]:
+                        price_list = ", ".join(result["prices"]) if result["prices"] else "Detected"
 
-            if previous != result:
-                LAST_AVAILABLE[name] = result
-
-                if result["layout_accessible"]:
-                    price_list = (
-                        ", ".join(result["prices"])
-                        if result["prices"]
-                        else "Detected"
-                    )
-
-                    message = f"""
+                        message = f"""
 🚨 SEAT LAYOUT LIVE 🚨
 
 🏏 Match: {name}
 
-💺 Seat Layout Accessible
-💰 Price Blocks: {price_list}
+💺 Layout Accessible
+💰 Prices: {price_list}
 
-🔗 Open Layout:
+🔗 Book Here:
 {data['seat_url']}
-                    """
+                        """
 
-                    for user in SUBSCRIBERS:
-                        await app.bot.send_message(
-                            chat_id=user,
-                            text=message
-                        )
+                        for user in SUBSCRIBERS:
+                            await app.bot.send_message(chat_id=user, text=message)
+
+            except Exception as e:
+                print("Error:", e)
 
         await asyncio.sleep(30)
 
@@ -146,7 +105,7 @@ async def post_init(app):
 
 def main():
     if not TOKEN:
-        print("ERROR: TOKEN not found in environment variables")
+        print("TOKEN missing")
         return
 
     app = ApplicationBuilder().token(TOKEN).post_init(post_init).build()
@@ -155,7 +114,7 @@ def main():
     app.add_handler(CommandHandler("subscribe", subscribe))
     app.add_handler(CommandHandler("unsubscribe", unsubscribe))
 
-    print("🔥 Cloud Live Monitor Running (30s interval)")
+    print("🔥 Playwright Cloud Monitor Running")
     app.run_polling()
 
 
