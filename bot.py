@@ -1,14 +1,15 @@
+import os
 import asyncio
 import time
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
-from selenium.webdriver.common.by import By
 from selenium.common.exceptions import WebDriverException
 from webdriver_manager.chrome import ChromeDriverManager
 from telegram.ext import ApplicationBuilder, CommandHandler
 
-TOKEN = "8773268736:AAERBWe6EQJL8d2U5tF5SXpcbCRjRYhxlXE"
+# 🔐 TOKEN from Railway Environment Variable
+TOKEN = os.getenv("TOKEN")
 
 MATCHES = {
     "Semi Final 2": {
@@ -22,7 +23,7 @@ MATCHES = {
 SUBSCRIBERS = set()
 LAST_AVAILABLE = {}
 
-# 🔥 STEALTH DRIVER
+# 🔥 STEALTH CHROME DRIVER
 def create_driver():
     options = Options()
     options.add_argument("--headless=new")
@@ -38,7 +39,9 @@ def create_driver():
         options=options
     )
 
-    driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
+    driver.execute_script(
+        "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
+    )
     return driver
 
 
@@ -48,14 +51,12 @@ def check_seat_layout(url):
         try:
             driver = create_driver()
             driver.get(url)
-            time.sleep(5)
+            time.sleep(6)
 
             page = driver.page_source.lower()
 
-            # Detect seat layout loaded
             layout_accessible = "block" in page
 
-            # Detect price blocks
             prices = []
             if "₹2000" in page:
                 prices.append("₹2000")
@@ -75,21 +76,26 @@ def check_seat_layout(url):
 
         except WebDriverException:
             print(f"Retry attempt {attempt+1}")
-            time.sleep(3)
+            time.sleep(4)
 
     return None
 
 
 async def start(update, context):
-    await update.message.reply_text("🚀 Advanced Live Monitor Started\nUse /subscribe")
+    await update.message.reply_text(
+        "🚀 Advanced Live Monitor Started\nUse /subscribe"
+    )
+
 
 async def subscribe(update, context):
     SUBSCRIBERS.add(update.effective_chat.id)
-    await update.message.reply_text("✅ Subscribed")
+    await update.message.reply_text("✅ Subscribed for alerts")
+
 
 async def unsubscribe(update, context):
     SUBSCRIBERS.discard(update.effective_chat.id)
     await update.message.reply_text("❌ Unsubscribed")
+
 
 async def monitor(app):
     while True:
@@ -107,7 +113,11 @@ async def monitor(app):
                 LAST_AVAILABLE[name] = result
 
                 if result["layout_accessible"]:
-                    price_list = ", ".join(result["prices"]) if result["prices"] else "Unknown"
+                    price_list = (
+                        ", ".join(result["prices"])
+                        if result["prices"]
+                        else "Detected"
+                    )
 
                     message = f"""
 🚨 SEAT LAYOUT LIVE 🚨
@@ -115,14 +125,17 @@ async def monitor(app):
 🏏 Match: {name}
 
 💺 Seat Layout Accessible
-💰 Price Blocks Detected: {price_list}
+💰 Price Blocks: {price_list}
 
 🔗 Open Layout:
 {data['seat_url']}
                     """
 
                     for user in SUBSCRIBERS:
-                        await app.bot.send_message(chat_id=user, text=message)
+                        await app.bot.send_message(
+                            chat_id=user,
+                            text=message
+                        )
 
         await asyncio.sleep(30)
 
@@ -132,13 +145,17 @@ async def post_init(app):
 
 
 def main():
+    if not TOKEN:
+        print("ERROR: TOKEN not found in environment variables")
+        return
+
     app = ApplicationBuilder().token(TOKEN).post_init(post_init).build()
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("subscribe", subscribe))
     app.add_handler(CommandHandler("unsubscribe", unsubscribe))
 
-    print("🔥 Advanced Selenium Monitor Running (30s interval)")
+    print("🔥 Cloud Live Monitor Running (30s interval)")
     app.run_polling()
 
 
